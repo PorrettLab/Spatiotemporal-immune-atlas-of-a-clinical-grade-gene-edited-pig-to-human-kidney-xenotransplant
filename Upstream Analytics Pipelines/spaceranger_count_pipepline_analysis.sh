@@ -13,8 +13,9 @@
 #SBATCH --mail-type=FAIL 
 #SBATCH --mail-user=mail@uab.edu
 
-
 export PATH=/data/project/porrettlab/shared_coding_resources/tools/spaceranger/spaceranger-2.0.0:$PATH
+
+cd /data/project/porrettlab/experiments/20211101_pig_human/visium/analysis
 
 spaceranger count --id=D4BX1R_ph38 \
                   --transcriptome=/data/project/porrettlab/experiments/20211101_pig_human/ref/hg38_and_ss11 \
