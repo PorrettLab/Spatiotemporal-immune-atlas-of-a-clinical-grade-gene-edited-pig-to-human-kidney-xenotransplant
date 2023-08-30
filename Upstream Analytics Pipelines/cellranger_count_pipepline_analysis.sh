@@ -15,7 +15,7 @@
 
 module load CellRanger/7.1.0
 
-cd /path/to/outputs/dir
+cd /data/project/porrettlab/experiments/20211101_pig_human/scRNAseq/analysis/hpkcd45
 
 cellranger count --id=HPKcd45_hp38 \
                  --transcriptome=/data/project/porrettlab/experiments/20211101_pig_human/ref/hg38_and_ss11
