@@ -1,7 +1,7 @@
 # Spatiotemporal immune atlas of the first clinical-grade, gene-edited pig-to-human kidney xenotransplant
 
 #### This repository contains analytics files and code that were used in the generation of the manuscript: *Spatiotemporal immune atlas of the first clinical-grade, gene-edited pig-to-human kidney xenotransplant*
-
+&nbsp;
 ##### File descriptions:
 -------------------------
 
@@ -19,7 +19,8 @@
 |10|[Downstream Analytics/Cell-type deconvolution of spatial transcriptomics data using Cell2location](https://github.com/PorrettLab/Spatiotemporal-immune-atlas-of-the-1st-clinical-grade-gene-edited-pig-to-human-kidney-xenotransplant/tree/main/Downstream%20Analytics/Cell-type%20deconvolution%20of%20spatial%20transcriptomics%20data%20using%20Cell2location)|[cell2location_analysis.ipynb](https://github.com/PorrettLab/Spatiotemporal-immune-atlas-of-the-1st-clinical-grade-gene-edited-pig-to-human-kidney-xenotransplant/blob/main/Downstream%20Analytics/Cell-type%20deconvolution%20of%20spatial%20transcriptomics%20data%20using%20Cell2location/cell2location_analysis.ipynb)|This file provides an example on how cell2location analyses were conducted in this study|
 <!--- --->
 
-
+&nbsp;
+&nbsp;
 
 -------------------------
 **Please cite (subject to change):**
