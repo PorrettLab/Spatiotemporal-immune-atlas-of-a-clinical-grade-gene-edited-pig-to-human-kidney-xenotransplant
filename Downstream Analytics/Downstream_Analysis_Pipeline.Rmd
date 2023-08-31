@@ -1,0 +1,688 @@
+---
+title: "Spatiotemporal immune atlas of the first clinical-grade, gene-edited pig-to-human kidney xenotransplant"
+subtitle: "Downstream Analysis of CD45+ immune cells (General analytics pipeline exemplified herein)"
+output:
+  rmdformats::readthedown:
+    self_contained: true
+    thumbnails: false
+    lightbox: true
+    downcute_theme: "chaos"
+editor_options: 
+  chunk_output_type: console
+---
+
+
+## Overview
+Our overarching aim in this vignette is to analyse CD45+ immune cells (3' Gene Expression scRNA-seq) from the 10-GE porcine right xenograft using Seurat.
+
+
+**Analysis summary:**
+
+- Counts were processed using the standard Seurat (v4.3.0.1) workflow (https://satijalab.org/seurat/articles/pbmc3k_tutorial.html)
+
+- The human-pig CD45+ (hpcd45) dataset consists of 9,085 input cells 
+
+- Number of cells after filtering: 6,513
+
+- Key filtering thresholds: nFeature_RNA > 200  & nFeature_RNA < 3000 & percent.mt.ss11 < 4 & percent.mt.hg19 < 12 
+
+- Normalization method used: LogNormalize
+
+- Dimensions (dims) used for the uniform manifold approximation and projection (UMAP) algorithm (RunUMAP) and also used for k-nearest neighbor (KNN) graph construction FindNeighbors(): 1:20 considered from PCA analysis
+
+## Downstream Analysis
+### Loading required packages
+```{r}
+suppressPackageStartupMessages({
+  library(Seurat)
+  library(cowplot)
+  library(dplyr)
+  library(Matrix)
+  library(reticulate)
+  library(monocle)
+  library(WebGestaltR)
+  library(harmony)
+  library(MAST)
+  library(devtools)
+  library(ggplot2)
+  library(patchwork)
+  library(SeuratData) 
+  library(SeuratWrappers)
+  library(dplyr)
+  library(hdf5r)
+  library(ape)
+  library(Rfast2)
+  library(RColorBrewer)
+  library(viridis)
+  library(data.table)
+  library(gridExtra)
+  library(purrr)
+  library(usefun)
+  library(formattable)
+  library(splitstackshape)
+  library(formatR)
+  library(venn)
+  library(VennDiagram)
+  library(Hmisc)
+  library(interp)
+  library(knitr)
+})
+```
+
+### Set working directory
+```{r}
+setwd("/Users/Anchor/projects/xeno_manuscript/hpcd45")
+```
+
+We'll start our analyses by assessing and removing ambient RNA in our dataset before proceeding with further downstream QC and analyses
+
+## [Removing Ambient RNA Using SoupX](https://academic.oup.com/gigascience/article/9/12/giaa151/6049831)
+Droplet based single cell RNA sequence analyses assume all acquired RNAs are endogenous to cells. However, any cell free RNAs contained within the input solution are also captured by these assays. This sequencing of cell free RNA constitutes a background contamination that has the potential to confound the correct biological interpretation of single cell transcriptomic data. Contamination from this “soup” of cell free RNAs is ubiquitous, experiment specific in its composition and magnitude, and can lead to erroneous biological conclusions. **SoupX** is a method used for quantifying the extent of the contamination and estimating “background corrected”, cell expression profiles that can be integrated with existing downstream analysis tools. soupX reduces batch effects, strengthens cell-specific quality control and improves biological interpretation
+
+The method to do this consists of three parts:
+
+1. Calculate the profile of the soup
+2. Estimate the cell specific contamination fraction
+3. Infer a corrected expression matrix
+
+Various approaches of running soupX to estimate and remove soup contamination have been suggested here:
+
+https://cran.r-project.org/web/packages/SoupX/readme/README.html and here:
+
+https://rawcdn.githack.com/constantAmateur/SoupX/204b602418df12e9fdb4b68775a8b486c6504fe4/inst/doc/pbmcTutorial.html
+
+
+**1. Defining your own clusters**
+```{r, eval=FALSE}
+hpcd45.filt.matrix <- Read10X_h5("outs/filtered_feature_bc_matrix.h5",use.names = T)
+hpcd45.raw.matrix  <- Read10X_h5("outs/raw_feature_bc_matrix.h5",use.names = T)
+
+str(hpcd45.raw.matrix)
+str(hpcd45.filt.matrix)
+
+hpcd45.Seurat.Object  <- CreateSeuratObject(counts = hpcd45.filt.matrix)
+hpcd45.Seurat.Object
+
+soup.channel  <- SoupChannel(hpcd45.raw.matrix, hpcd45.filt.matrix)
+soup.channel
+
+hpcd45.Seurat.Object[["percent.mt"]] <- PercentageFeatureSet(hpcd45.Seurat.Object, pattern = "^MT-")
+
+hpcd45.Seurat.Object <- NormalizeData(hpcd45.Seurat.Object, normalization.method = "LogNormalize", scale.factor = 10000)
+hpcd45.Seurat.Object <- FindVariableFeatures(hpcd45.Seurat.Object, selection.method = "vst", nfeatures = 2000)
+all.genes <- rownames(hpcd45.Seurat.Object)
+hpcd45.Seurat.Object <- ScaleData(hpcd45.Seurat.Object, features = all.genes)
+hpcd45.Seurat.Object <- RunPCA(hpcd45.Seurat.Object, features = VariableFeatures(object = hpcd45.Seurat.Object))
+hpcd45.Seurat.Object <- RunUMAP(hpcd45.Seurat.Object, dims = 1:30)
+hpcd45.Seurat.Object <- FindNeighbors(hpcd45.Seurat.Object, dims = 1:30)
+hpcd45.Seurat.Object <- FindClusters(hpcd45.Seurat.Object)
+
+meta    <- hpcd45.Seurat.Object@meta.data
+umap    <- hpcd45.Seurat.Object@reductions$umap@cell.embeddings
+soup.channel  <- setClusters(soup.channel, setNames(meta$seurat_clusters, rownames(meta)))
+soup.channel  <- setDR(soup.channel, umap)
+head(meta)
+
+soup.channel  <- autoEstCont(soup.channel)
+
+head(soup.channel$soupProfile[order(soup.channel$soupProfile$est, decreasing = T), ], n = 20)
+
+adj.matrix  <- adjustCounts(soup.channel, roundToInt = T)
+```
+
+**2. Automatic method to estimate the contamination fraction and decontaminate data. Leverages clustering information from cellranger.**
+```{r, eval=FALSE}
+sc1 = load10X("outs/")
+str(sc1)
+sc1 = autoEstCont(sc1)
+out1 = adjustCounts(sc1)
+dim(out1)
+DropletUtils:::write10xCounts("hpcd45_soupX_filtered", out1) #we shall use results from this run
+```
+
+**3. Manually loading and decontaminating the data - here I am loading clusters from cellranger analysis**
+```{r, eval=FALSE}
+table_of_counts <- Read10X_h5("outs/filtered_feature_bc_matrix.h5",use.names = T)
+table_of_droplets  <- Read10X_h5("outs/raw_feature_bc_matrix.h5",use.names = T)
+
+sc2  <- SoupChannel(table_of_droplets, table_of_counts) 
+head(sc2$metaData)
+
+cluster_labels <- read.csv("outs/analysis/clustering/graphclust/clusters.csv")
+
+all.equal(rownames(sc2$metaData), cluster_labels$Barcode)
+
+sc2 = setClusters(sc2, cluster_labels$Cluster)
+sc2 = autoEstCont(sc2)
+out2 = adjustCounts(sc2)
+```
+
+## Loading soupX Corrected Data
+We'll load the data using the `Read10X()` function. The `Read10X()` function reads in the output of the [cellranger](https://support.10xgenomics.com/single-cell-gene-expression/software/pipelines/latest/what-is-cell-ranger) pipeline from 10X, returning a unique molecular identified (UMI) count matrix. The values in this matrix represent the number of molecules for each feature (i.e. gene; row) that are detected in each cell (column).
+
+We next use the count matrix to create a `Seurat` object. The object serves as a container that has both data (like the count matrix) and analysis (like PCA, or clustering results) for a single-cell dataset. For a technical discussion of the `Seurat` object structure, check Seurat's [GitHub Wiki](https://github.com/satijalab/seurat/wiki). For example, the count matrix is stored in `hpcd45[["RNA"]]@counts`.
+
+
+```{r, warning=FALSE}
+#Loading soupX filtered data
+hpcd45.soupX.Filtered <- Read10X(data.dir = "soupX_hpcd45_filt")
+dim(hpcd45.soupX.Filtered)
+str(hpcd45.soupX.Filtered)
+
+#Initialize the Seurat object with the raw (non-normalized data)
+hpcd45 <- CreateSeuratObject(counts = hpcd45.soupX.Filtered, project = "dec1", min.cells = 5, min.features = 200)
+hpcd45
+str(hpcd45)
+```
+
+## Standard Pre-processing Workflow
+
+The steps below encompass the standard pre-processing workflow for scRNA-seq data in Seurat. These represent the selection and filtration of cells based on QC metrics, data normalization and scaling, and the detection of highly variable features.
+
+## Quality Control (QC)
+
+Seurat allows you to easily explore QC metrics and filter cells based on any user-defined criteria. A few QC metrics [commonly used](https://www.ncbi.nlm.nih.gov/pmc/articles/PMC4758103/) by the community include:
+
+* The number of unique genes detected in each cell. 
++ Low-quality cells or empty droplets will often have very few genes
++ Cell doublets or multiplets may exhibit an aberrantly high gene count
+* Similarly, the total number of molecules detected within a cell (correlates strongly with unique genes)
+* The percentage of reads that map to the mitochondrial genome
++ Low-quality or dying cells often exhibit extensive mitochondrial contamination
++ We calculate mitochondrial QC metrics with the `PercentageFeatureSet()` function, which calculates the percentage of counts originating from a set of features
++ We use the set of all genes starting with `MT-` as a set of mitochondrial genes
+
+```{r}
+# Calculating proportion of transcripts mapping to mitochondrial genes
+
+# Filtering on human and pig mitocondrial genes as separate entities
+# First we'll store mitochondrial percentage for both pig and human in the meta data object and filter on these respectively
+# mitochondrial ratio: this metric will give us a percentage of cell reads originating from 
+# the mitochondrial genes Seurat has a convenient function that allows us to calculate the 
+# proportion of transcripts mapping to mitochondrial genes. The PercentageFeatureSet() 
+# will take a pattern and search the gene identifiers. For each column (cell) it 
+# will take the sum of the counts slot for features belonging to the set, divide by the 
+# column sum for all features and multiply by 100
+
+#We'll store the percentage of reads that map to the mitochondrial genome in the metadata object as "percent.mt" for each specie as gene names are encoded/are different
+(mito_genes_human <- rownames(hpcd45)[grep("MT-", rownames(hpcd45))])
+
+hpcd45[["percent.mt.ss11"]] <- PercentageFeatureSet(hpcd45, features = c("ss11-ND1", "ss11-ND2", "ss11-COX1", "ss11-COX2", "ss11-ATP8", "ss11-ATP6", "ss11-COX3", "ss11-ND3", "ss11-ND4L", "ss11-ND4", "ss11-ND5", "ss11-ND6", "ss11-CYTB"))
+
+hpcd45[["percent.mt.hg19"]] <- PercentageFeatureSet(hpcd45, features = c("hg19-MT-ND1", "hg19-MT-ND2",  "hg19-MT-CO1", "hg19-MT-CO2",  "hg19-MT-ATP8", "hg19-MT-ATP6", "hg19-MT-CO3",  "hg19-MT-ND3",  "hg19-MT-ND4L", "hg19-MT-ND4" , "hg19-MT-ND5",  "hg19-MT-ND6" , "hg19-MT-CYB" )) 
+
+#The number of unique genes and total molecules are automatically calculated during `CreateSeuratObject()` and we can find these stored in the object meta data as nFeature_RNA and nCount_RNA respecitvely.
+hpcd45@meta.data %>% 
+  head(n=5)
+```
+
+### Feature plots before QC
+
+**Visualize QC metrics, and leverage plots to filter cells**
+
+```{r, fig.width=12, fig.height=4}
+p1 <- VlnPlot(hpcd45, features = c("nFeature_RNA"), ncol = 1, cols= "skyblue") + theme_light(base_size = 14) + theme(legend.position = "none", plot.title = element_text(size = 14, face = "bold", hjust = 0.5))
+p2 <- VlnPlot(hpcd45, features = c("nCount_RNA"), ncol = 1, cols= "skyblue") + theme_light(base_size = 14) + theme(legend.position = "none", plot.title = element_text(size = 14, face = "bold", hjust = 0.5))
+p3 <- VlnPlot(hpcd45, features = c("percent.mt.ss11"), ncol = 1, cols= "skyblue") + theme_light(base_size = 14) + theme(legend.position = "none", plot.title = element_text(size = 14, face = "bold", hjust = 0.5))
+p4 <- VlnPlot(hpcd45, features = c("percent.mt.hg19"), ncol = 1, cols= "skyblue") + theme_light(base_size = 14) + theme(legend.position = "none", plot.title = element_text(size = 14, face = "bold", hjust = 0.5))
+grid.arrange(p1, p2, p3, p4, ncol=4)
+```
+
+```{r, message=FALSE, fig.width=20, fig.height=7}
+# FeatureScatter is typically used to visualize feature-feature relationships, but can be used
+# for anything calculated by the object, i.e. columns in object metadata, PC scores etc.
+
+plot1 <- FeatureScatter(hpcd45, feature1 = "nCount_RNA", feature2 = "percent.mt.ss11", cols= "gray50")
+plot2 <- FeatureScatter(hpcd45, feature1 = "nCount_RNA", feature2 = "percent.mt.hg19", cols= "gray50")
+plot3 <- FeatureScatter(hpcd45, feature1 = "nCount_RNA", feature2 = "nFeature_RNA", cols= "gray50")
+plot1 + plot2 + plot3
+```
+
+Shown above are scatter plots of features (typically feature expression), across a set of single cells. Pearson correlation between the features is displayed above the plot.
+
+**More exploration on the data and distributions**
+
+```{r, fig.height=3}
+df <- as.data.table(hpcd45@meta.data)
+sel <- c("orig.ident", "nCount_RNA", "nFeature_RNA", "percent.mt.ss11", "percent.mt.hg19")
+df <- df[, sel, with = FALSE]
+df[1:4, ]
+fontsize <- 10
+linesize <- 0.35
+
+gp.ls <- df[, 2:5] %>% imap( ~ {
+  
+  give.n <- function(x) {
+    return(c(y = median(x) + max(x) / 10, label = round(median(x), 2)))
+  }
+  
+  col.ls <-
+    setNames(
+      c('gray40', 'gray50', 'gray70', 'gray90', "gray" ),
+      c("nCount_RNA", "nFeature_RNA", "percent.mt.ss11", "percent.mt.hg19", "log10GenesPerUMI")
+    )
+  
+  ggplot(data = df, aes(x = orig.ident, y = .x)) +
+    geom_violin(trim = FALSE, fill = col.ls[.y]) +
+    ggtitle(label = .y) + ylab(label = .y) +
+    theme_bw() +
+    theme(
+      panel.grid.major = element_blank(),
+      panel.grid.minor = element_blank(),
+      strip.background = element_blank(),
+      panel.border = element_blank()
+    ) +
+    theme(
+      axis.text = element_text(size = fontsize),
+      axis.line = element_line(colour = "black", size = linesize),
+      axis.ticks = element_line(size = linesize),
+      axis.title.x = element_blank(),
+      axis.ticks.length = unit(.05, "cm"),
+      plot.title = element_text(size = fontsize + 2, hjust = 0.5),
+      legend.position = 'none'
+    ) +
+    stat_summary(fun = median, geom = "point", col = "black") + 
+    stat_summary(fun.data = give.n,
+                 geom = "text",
+                 col = "black") + theme_light()
+})
+
+grid.arrange(gp.ls[[1]], gp.ls[[2]], gp.ls[[3]],gp.ls[[4]], ncol = 4)
+```
+
+
+## Percent MT Distribution - Human and Pig
+```{r fig.width=15, fig.height=8}
+#Density plot
+p1 <- hpcd45@meta.data %>% 
+  ggplot(aes(x = hpcd45@meta.data$percent.mt.hg19)) +
+  geom_density() + scale_color_manual(values = c("blue")) + 
+  theme_classic() +
+  geom_vline(aes(xintercept = mean(hpcd45@meta.data$percent.mt.hg19)),
+             color="blue", linetype="dashed", size = 0.5) + ggtitle("Human") + 
+  theme(plot.title = element_text(hjust=0.5, face="bold")) +
+  scale_x_continuous(breaks = seq(0, 50, by = 1))  
+
+
+p2 <- hpcd45@meta.data %>% 
+  ggplot(aes(x = hpcd45@meta.data$percent.mt.ss11)) +
+  geom_density() + scale_color_manual(values = c("blue")) + 
+  theme_classic() +
+  geom_vline(aes(xintercept = mean(hpcd45@meta.data$percent.mt.ss11)),
+             color="blue", linetype="dashed", size = 0.5) + ggtitle("Human") + 
+  theme(plot.title = element_text(hjust=0.5, face="bold")) + 
+  scale_x_continuous(breaks = seq(0, 50, by = 1)) + ggtitle("Pig") 
+
+
+grid.arrange(p1, p2, nrow=2)
+```
+
+
+### Number of cell counts per sample before filtering
+```{r, fig.height=5, fig.width=3}
+metadata <- hpcd45@meta.data
+# Add cell IDs to metadata
+metadata$cells <- rownames(metadata)
+
+# Rename columns
+metadata <- metadata %>%
+  dplyr::rename(nUMI = nCount_RNA,
+                nGene = nFeature_RNA)
+
+unique(metadata$orig.ident)
+# Visualize the number of cell counts per sample
+metadata %>% 
+  ggplot(aes(x=orig.ident, fill=orig.ident)) + 
+  geom_bar(color = "gray80", fill = "gray80") +
+  theme_classic() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) +
+  theme(plot.title = element_text(hjust=0.5, face="bold")) +
+  ggtitle("NCells") + theme(legend.position = "none") + 
+  theme(legend.position = "none") + 
+  geom_text(stat='count', aes(label=..count..), vjust = 0.5)
+```
+
+### Number UMIs/transcripts per cell
+```{r, fig.width=4, fig.height=3}
+#Visualize the number UMIs/transcripts per cell
+ggplot(metadata, aes(x = nUMI)) + 
+  geom_histogram(aes(y = ..density..),
+                 alpha = 0.3, color="gray50", fill="white") +
+  scale_x_log10() + 
+  theme_classic() +
+  ylab("Cell density/UMI counts per cell") +
+  geom_vline(xintercept = 500) + theme(legend.position = "none")+
+  geom_density(lwd = 0.5, colour = 4,
+               fill = 4, alpha = 0.1)
+#The UMI counts per cell should generally be above 500, that is the low end of what we expect. If UMI counts are between 500-1000 counts, it is usable but the cells probably should have been sequenced more deeply
+```
+
+### More on Data and QC
+```{r, message=FALSE, warning=FALSE, fig.height=4, fig.width=6}
+counts <- Matrix(hpcd45@assays$RNA@counts)
+counts_per_cell <- Matrix::colSums(counts)
+counts_per_gene <- Matrix::rowSums(counts)
+genes_per_cell1 <- Matrix::colSums(counts>0) #count a gene only if it has non-zero reads mapped.
+cells_per_gene <- Matrix::rowSums(counts>0) #only count cells where the gene is expressed
+
+counts_per_cell <- as.data.frame(colSums(counts))
+counts_per_gene <- as.data.frame(rowSums(counts))
+genes_per_cell <- as.data.frame(colSums(counts>0)) 
+cells_per_gene <- as.data.frame(rowSums(counts>0) )
+
+colnames(counts_per_cell) <- "counts"
+colnames(counts_per_gene) <- "counts"
+colnames(genes_per_cell) <- "genes_per_cell"
+colnames(cells_per_gene) <- "cells_per_gene"
+
+df <- cbind(counts_per_cell, genes_per_cell)
+
+ggplot(df, aes(x=counts, y=genes_per_cell)) + geom_point(color="gray30") + scale_y_continuous(trans='log10') + scale_x_continuous(trans='log10') + theme_light()
+
+#Plot cells ranked by their number of detected genes.
+genes_per_cell$cells <- rownames(genes_per_cell)
+
+#The upper and lower limit curve bends ~give a good clue on what thresholds to set:
+ggplot(genes_per_cell, aes(x=reorder(genes_per_cell, cells), y=genes_per_cell)) + geom_point() + 
+  scale_y_continuous(trans='log10', breaks=seq(0, 5000, by = 1000)) + ggtitle("Genes per Cell") + theme_test(base_size = 12) + 
+  labs(x= "Cells", y="Number of Genes") + 
+  theme(axis.text.x = element_blank(), axis.ticks.x = element_blank(), plot.title = element_text(size = 14, face = "bold", hjust = 0.5))  
+```
+
+
+## Data Filtering
+
+```{r, fig.height=7}
+(Count93_nCount_RNA <- quantile(hpcd45@meta.data$nCount_RNA, 0.93)) # calculate value in the 93rd percentile for a hint on thresholds but these should be taken with a grain of salt, look at the above plots as well to determine thresholds
+(Count93_nFeature_RNA <- quantile(hpcd45@meta.data$nFeature_RNA, 0.93))
+(Count93_percent.mt.ss11 <-  quantile(hpcd45@meta.data$percent.mt.ss11, 0.93))
+(Count93_percent.mt.hg19 <-  quantile(hpcd45@meta.data$percent.mt.hg19, 0.93))
+
+summary(hpcd45@meta.data$nCount_RNA)
+summary(hpcd45@meta.data$nFeature_RNA)
+#hpcd45 <- subset(hpcd45, subset = nFeature_RNA > 200 & nFeature_RNA < 3000 & percent.mt.ss11 < 4 & percent.mt.hg19 < 12 & nCount_RNA < 10000)
+
+hpcd45 <- subset(hpcd45, subset = nFeature_RNA > 200 & nFeature_RNA < 3500 & percent.mt.ss11 < 4 & percent.mt.hg19 < 12)
+
+VlnPlot(hpcd45, features = c("nFeature_RNA", "nCount_RNA", "percent.mt.ss11", "percent.mt.hg19"), ncol = 2, pt.size = 0.1, cols= "skyblue")
+```
+
+### Data after filtering
+```{r, fig.height=5, fig.width=3}
+metadata <- hpcd45@meta.data
+# Add cell IDs to metadata
+metadata$cells <- rownames(metadata)
+
+# Rename columns
+metadata <- metadata %>%
+  dplyr::rename(nUMI = nCount_RNA,
+                nGene = nFeature_RNA)
+
+unique(metadata$orig.ident)
+# Visualize the number of cell counts per sample
+metadata %>% 
+  ggplot(aes(x=orig.ident, fill=orig.ident)) + 
+  geom_bar(color = "gray80", fill = "gray80") +
+  theme_classic() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) +
+  theme(plot.title = element_text(hjust=0.5, face="bold")) +
+  ggtitle("NCells") + theme(legend.position = "none") + 
+  theme(legend.position = "none") + 
+  geom_text(stat='count', aes(label=..count..), vjust = 0.5)
+```
+
+## Doublet Removal
+Detection of doublets was conducted in python using [scrublet](https://github.com/swolock/scrublet) and a file containing scrublet calls/predictions was written out. Doublet predictions were then loaded into R and used as a basis for filtering doublets out.
+
+Visualization of the doublet predictions in a 2-D embedding/UAMP: Predicted doublets should mostly co-localize (possibly in multiple clusters). If they do not, you may need to adjust the doublet score threshold, or change the pre-processing parameters to better resolve the cell states present in your data. 
+
+```{r, echo=FALSE, out.width = '70%'}
+include_graphics('scrublet_predictions/scublet_UMAP.png', auto_pdf = getOption("knitr.graphics.auto_pdf", FALSE),
+                 error = getOption("knitr.graphics.error", TRUE), dpi = 300)
+```
+
+As a good check, the simulated doublet histogram below should typically be bimodal. The left mode corresponds to "embedded" doublets generated by two cells with similar gene expression. The right mode corresponds to "neotypic" doublets, which are generated by cells with distinct gene expression (e.g., different cell types) and are expected to introduce more artifacts in downstream analyses. Scrublet can only detect neotypic doublets.
+This histogram is an important diagnostic plot. Doublet score threshold should separate the two shoulders of the bimodal distribution as shown below:
+
+```{r, echo=FALSE, out.width = '70%'}
+include_graphics('scrublet_predictions/scublet_histogram.png', auto_pdf = getOption("knitr.graphics.auto_pdf", FALSE),
+                 error = getOption("knitr.graphics.error", TRUE), dpi = 300)
+```
+
+
+```{r, fig.height=4, fig.width=5}
+#Loading scrublet predictions
+dim(scrublet_calls <- read.csv("scrublet_predictions/scrublet_calls.csv")) 
+table(scrublet_calls$predicted_doublets)# 303 doublets found
+
+dim(scrublet_calls <- scrublet_calls[which(scrublet_calls$X %in% rownames(hpcd45@meta.data)),])
+rownames(scrublet_calls) <- scrublet_calls$X
+scrublet_calls$X <-NULL
+dim(scrublet_calls)
+
+#Adding doublet information to metadata
+#First we'll ensure that the rownames in hpcd45 match the rownames in scrublet_calls. AddMetaData maps rownames but we'll still do so to ensure that mapping of predictions are made to respective bar codes
+scrublet_calls <- scrublet_calls[rownames(hpcd45@meta.data), ]
+head(rownames(scrublet_calls))
+head(rownames(hpcd45@meta.data))
+hpcd45 <- AddMetaData(hpcd45, scrublet_calls)
+
+#Without normalizing the data, we want to first identify the doublets in our datasets
+hpcd45_2 <- hpcd45
+hpcd45_2 <- FindVariableFeatures(hpcd45_2, selection.method = "vst", nfeatures = 2500)
+hpcd45_2 <- ScaleData(object = hpcd45_2, scale.max = 30,  verbose = FALSE)
+hpcd45_2 <- RunPCA(object = hpcd45_2, npcs = 30, verbose = FALSE)
+hpcd45_2 <- FindNeighbors(hpcd45_2, dims = 1:20, verbose = TRUE, reduction = "pca")
+hpcd45_2 <- RunUMAP(hpcd45_2, dims = 1:20, verbose = TRUE, reduction = "pca")
+hpcd45_2 <- FindClusters(hpcd45_2, verbose = TRUE, reduction = "pca") #Resolution can be adjusted 
+
+FeaturePlot(hpcd45_2, features = "doublet_scores", pt.size = 0.01)
+
+DimPlot(hpcd45_2, group.by = "predicted_doublets", pt.size = 0.01, cols = c("gray90", "firebrick3"))
+
+#Checking the nUMI for doublets and singlets
+VlnPlot(hpcd45_2,
+        features = "nCount_RNA",
+        pt.size = 0,
+        group.by = "predicted_doublets") + NoLegend()
+
+#Fractions of doublets per cluster
+df <- data.table(hpcd45_2@meta.data)
+
+perc <- as.data.frame(df %>% 
+                        group_by(seurat_clusters, predicted_doublets) %>%
+                        dplyr::summarise(cnt = n()) %>%
+                        mutate(freq = formattable::percent(cnt / sum(cnt), digits = 5)))
+
+perc$predicted_doublets <- as.character(perc$predicted_doublets)
+perc$predicted_doublets[perc$predicted_doublets == "True"] <- "Doublet"
+perc$predicted_doublets[perc$predicted_doublets == "False"] <- "Singlet"
+
+perc %>% 
+  ggplot() +
+  geom_bar(aes(x = seurat_clusters, y=freq,
+               group = predicted_doublets,
+               fill = predicted_doublets),
+           stat = "identity", width = 0.99, alpha = 0.8) +
+  theme_test()+ 
+  labs(y=paste0("% Distribution of doublets and singlets per cluster"), x="") +
+  scale_fill_manual(values = c("Doublet" = 'red3', "Singlet" = "gray80")) +
+  theme(legend.position = "right") +scale_y_continuous(expand = c(0,0))
+
+#Next we'll remove the doublets and see what the data looks like
+hpcd45_2 <- hpcd45_2[, hpcd45_2@meta.data[, "predicted_doublets"] == "False"]
+unique(hpcd45_2@meta.data$predicted_doublets)
+DimPlot(hpcd45_2, group.by = "predicted_doublets", pt.size = 0.01, cols = c("gray90", "firebrick3"), label = TRUE)
+```
+
+```{r, fig.height=5}
+VlnPlot(hpcd45_2, features = c("nFeature_RNA", "nCount_RNA", "percent.mt.ss11", "percent.mt.hg19"), ncol = 2, pt.size = 0)
+```
+
+**Filtering cells to remove doublets**
+```{r}
+hpcd45 <- hpcd45[, hpcd45@meta.data[, "predicted_doublets"] == "False"]
+unique(hpcd45@meta.data$predicted_doublets)
+```
+
+## Normalization
+After removing unwanted cells from the dataset, the next step is to normalize the data. 
+Based on our July 29 meeting, it was decided on that we'll apply LogNormalize to normalize our dataset as this method better represents the underlying biology of this data. The “LogNormalize” method normalizes the feature expression measurements for each cell by the total expression, multiplies this by a scale factor (10,000 by default), and log-transforms the result. Normalized values are stored in hpcd45[["RNA"]]@data.
+
+```{r}
+hpcd45 <- NormalizeData(hpcd45, normalization.method = "LogNormalize", scale.factor = 10000) 
+
+#Identification of highly variable features (feature selection)
+hpcd45 <- FindVariableFeatures(hpcd45, selection.method = "vst", nfeatures = 3000)
+
+#Identify the 10 most highly variable genes
+top10 <- head(VariableFeatures(hpcd45), 10)
+
+#Plot variable features with and without labels
+plot1 <- VariableFeaturePlot(hpcd45)
+plot2 <- LabelPoints(plot = plot1, points = top10, repel = TRUE)
+```
+
+## Scaling the Data and Performing Linear Dimensional Reduction
+Next we perform PCA on the scaled data. By default, only the previously determined variable features are used as input, but can be defined using `features` argument if you wish to choose a different subset.
+
+```{r}
+all.genes.hpcd45 <- rownames(hpcd45)
+hpcd45 <- ScaleData(object = hpcd45, scale.max = 30,  verbose = FALSE) 
+hpcd45 <- RunPCA(object = hpcd45, npcs = 30, verbose = FALSE) #performing PCA on the scaled data
+```
+Seurat provides several useful ways of visualizing both cells and features that define the PCA, including `VizDimReduction()`, `DimPlot()`, and `DimHeatmap()`
+
+```{r, fig.height=7, fig.width=12}
+# Examine and visualize PCA results a few different ways
+print(hpcd45[["pca"]], dims = 1:5, nfeatures = 5)
+
+VizDimLoadings(hpcd45, dims = 1:2, reduction = "pca")
+```
+
+In particular `DimHeatmap()` allows for easy exploration of the primary sources of heterogeneity in a dataset, and can be useful when trying to decide which PCs to include for further downstream analyses. Both cells and features are ordered according to their PCA scores. Setting `cells` to a number plots the 'extreme' cells on both ends of the spectrum, which dramatically speeds plotting for large datasets. Though clearly in a supervised analysis, we find this to be a valuable tool for exploring correlated feature sets.
+
+```{r, fig.height=3, fig.width=4}
+DimHeatmap(hpcd45, dims = 1, cells = 500, balanced = TRUE)
+```
+
+```{r, fig.height=17, fig.width=9}
+DimHeatmap(hpcd45, dims = 1:24, cells = 500, balanced = TRUE)
+```
+
+## Determine the Dimensionality of the Dataset
+
+To overcome the extensive technical noise in any single feature for scRNA-seq data, Seurat clusters cells based on their PCA scores, with each PC essentially representing a 'metafeature' that combines information across a correlated feature set. The top principal components therefore represent a robust compression of the dataset. However, how many components should we choose to include? 10? 20? 100?
+
+We shall use the 'Elbow plot' (`ElbowPlot()` function): a ranking of principle components based on the percentage of variance explained by each one.  
+
+```{r, fig.height=4, fig.width=5}
+ElbowPlot(hpcd45, ndims = 30) #determining dimentionality of dataset
+```
+
+Identifying the true dimensionality of a dataset can be challenging/uncertain. It is therefore recommended to consider these three approaches as well: The first is more supervised, exploring PCs to determine relevant sources of heterogeneity, and could be used in conjunction with GSEA for example. The second implements a statistical test based on a random null model, but is time-consuming for large datasets, and may not return a clear PC cutoff. The third is a heuristic that is commonly used, and can be calculated instantly. 
+
+**Alternative method to determine number of principal components**
+
+```{r}
+#Determine percent of variation associated with each PC
+pct <- hpcd45[["pca"]]@stdev / sum(hpcd45[["pca"]]@stdev) * 100
+
+#Calculate cumulative percents for each PC
+cumulative_percentage <- cumsum(pct)
+
+#Determine which PC exhibits cumulative percent greater than 90% and % variation associated with the PC as less than 5
+pcs.perc <- which(cumulative_percentage > 90 & pct < 5)[1]
+pcs.perc
+
+#Determine the difference between variation of PC and subsequent PC
+var.pcs <- sort(which((pct[1:length(pct) - 1] - pct[2:length(pct)]) > 0.1), decreasing = T)[1] + 1
+
+#last point where change of % of variation is more than 0.1%.
+var.pcs
+
+#Minimum of the two calculation
+pcs <- min(pcs.perc, var.pcs)
+pcs
+```
+
+```{r, fig.height=6, fig.width=12}
+#Create a dataframe with values
+plot_df <- data.frame(pct = pct, 
+           cumulative_percentage = cumulative_percentage, 
+           rank = 1:length(pct))
+
+#Elbow plot to visualize 
+  ggplot(plot_df, aes(cumulative_percentage, pct, label = rank, color = rank > pcs)) + 
+  geom_text() + 
+  geom_vline(xintercept = 90, color = "blue", linetype="dashed", size=0.5) + 
+  geom_hline(yintercept = min(pct[pct > 5]), color = "blue", linetype="dashed", size=0.5) +
+  theme_light() + scale_colour_discrete(l = 40)
+```
+
+However, we still see variance explained by pcs 16 and 20, so we'll consider pcs 1-20
+
+## Cell Clustering
+
+Seurat v3 or higher applies a graph-based clustering approach, building upon initial strategies in ([Macosko *et al*](http://www.cell.com/abstract/S0092-8674(15)00549-8)). Importantly, the *distance metric* which drives the clustering analysis (based on previously identified PCs) remains the same. However, the approach used to partition the cellular distance matrix into clusters has dramatically improved. The approach was heavily inspired by recent manuscripts which applied graph-based clustering approaches to scRNA-seq data [[SNN-Cliq, Xu and Su, Bioinformatics, 2015]](http://bioinformatics.oxfordjournals.org/content/early/2015/02/10/bioinformatics.btv088.abstract) and CyTOF data [[PhenoGraph, Levine *et al*., Cell, 2015]](http://www.ncbi.nlm.nih.gov/pubmed/26095251). Briefly, these methods embed cells in a graph structure - for example a K-nearest neighbor (KNN) graph, with edges drawn between cells with similar feature expression patterns, and then attempt to partition a graph into highly interconnected 'quasi-cliques' or 'communities'. 
+
+First we construct a KNN graph based on the euclidean distance in PCA space, and refine the edge weights between any two cells based on the shared overlap in their local neighborhoods (Jaccard similarity). This step is performed using the `FindNeighbors()` function, and takes as input the previously defined dimensionality of the dataset (first n PCs that have been chosen).
+
+To cluster the cells, modularity optimization techniques are applied such as the Louvain algorithm (default) or SLM [[SLM, Blondel *et al*., Journal of Statistical Mechanics]](http://dx.doi.org/10.1088/1742-5468/2008/10/P10008), to iteratively group cells together, with the goal of optimizing the standard modularity function. The `FindClusters()` function implements this procedure, and contains a resolution parameter that sets the 'granularity' of the downstream clustering, with increased values leading to a greater number of clusters. Setting this parameter between 0.4-1.2 typically returns good results for single-cell datasets of around 3K cells. Optimal resolution often increases for larger datasets. The clusters can be found using the `Idents()` function.
+
+
+```{r}
+hpcd45 <- FindNeighbors(hpcd45, dims = 1:20, verbose = TRUE, reduction = "pca")
+hpcd45 <- FindClusters(hpcd45, verbose = TRUE, resolution = 0.8, reduction = "pca") 
+# Look at cluster IDs of the first 5 cells
+head(Idents(hpcd45), 5)
+```
+
+## Run Non-Linear Dimensional Reduction 
+
+Seurat offers several non-linear dimensional reduction techniques, such as tSNE and UMAP, to visualize and explore these datasets. The goal of these algorithms is to learn the underlying manifold of the data in order to place similar cells together in low-dimensional space. Cells within the graph-based clusters determined above should co-localize on these dimension reduction plots. As input to the UMAP and tSNE, it is suggested to use the same PCs as input to the clustering analysis.
+```{r, fig.height=4, fig.width=7}
+hpcd45 <- RunUMAP(hpcd45, dims = 1:20, verbose = TRUE, reduction = "pca")
+#Visualize UMAP
+DimPlot(object = hpcd45, reduction = "umap", label = TRUE, label.size = 6 )
+table(Idents(hpcd45))
+```
+**Note change in UMAP orientation due to change in computing environment**
+
+We can save the filtered and clean object at this point for further downstream analyses
+
+```{r, eval=FALSE}
+saveRDS(hpcd45, file = "hpcd45_cleaned_object.rds")
+```
+
+## Finding Differentially Expressed Features (Cluster Biomarkers)
+
+Seurat can help us find markers that define clusters via differential expression. By default, it identifies positive and negative markers of a single cluster (specified in `ident.1`), compared to all other cells.  `FindAllMarkers()` automates this process for all clusters, but you can also test groups of clusters vs. each other, or against all cells.
+
+The `min.pct` argument requires a feature to be detected at a minimum percentage in either of the two groups of cells, and the thresh.test argument requires a feature to be differentially expressed (on average) by some amount between the two groups. You can set both of these to 0, but with a dramatic increase in time - since this will test a large number of features that are unlikely to be highly discriminatory. As another option to speed up these computations, `max.cells.per.ident` can be set. This will downsample each identity class to have no more cells than whatever this is set to. While there is generally going to be a loss in power, the speed increases can be significant and the most highly differentially expressed features will likely still rise to the top.
+
+
+Note on key parameters passed when running FindMarkers():
+*min.pct:*
+To speed up runs, only test genes that are detected in a minimum fraction of min.pct cells in either of the two populations by setting min.pct = user-defined value (Default is 0.1). Meant to speed up the function by not testing genes that are very infrequently expressed. If we set min.pct = 0, this means that we are interested in all genes however this takes quite long. 
+
+*only.pos:*
+Only return positive markers: by default this value is FALSE. Similarly you could set only.pos = FALSE to return both positive and negative markers
+
+*logfc.threshold:*
+Limit testing to genes which show, on average, at least X-fold difference (log-scale) between the two groups of cells. Default is 0.25. Increasing logfc.threshold speeds up the function, but can miss weaker signals. Setting logfc.threshold = 0 will return all expressed genes in case you need to look at the entire list - note that this is also computationally intensive and some runs can typically take an entire day depending on the number of cells in a dataset.
+
+```{r, eval=FALSE}
+(clusters <- c(0, seq(1:14))) 
+
+#No need to rerun this as it takes a while at min.pct = 0, logfc.threshold = 0 (to recover even weak signals)
+for(i in clusters){
+  cluster.markers <- FindMarkers(hpcd45, ident.1 = i, min.pct = 0.25, logfc.threshold = 0.25, only.pos = F)
+  cluster.markers <- cluster.markers %>% arrange(desc(avg_log2FC))
+  write.csv(cluster.markers, file=paste0("Markers/All_Cluster", i, "_Markers.csv"))
+}
+```
+
+```{r}
+sessionInfo()
+```
