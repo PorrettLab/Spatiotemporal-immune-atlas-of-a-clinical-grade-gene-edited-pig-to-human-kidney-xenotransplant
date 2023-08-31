@@ -1,8 +1,5 @@
 # Spatiotemporal immune atlas of the first clinical-grade, gene-edited pig-to-human kidney xenotransplant
 
-This github repo contains 
-
-
 ### This repository contains analytics files and code that were used in the generation of the manuscript: *Spatiotemporal immune atlas of the first clinical-grade, gene-edited pig-to-human kidney xenotransplant*
 
 ### File descriptions:
@@ -16,8 +13,9 @@ This github repo contains
 |2|[Downstream Analytics](https://github.com/PorrettLab/Spatiotemporal-immune-atlas-of-the-1st-clinical-grade-gene-edited-pig-to-human-kidney-xenotransplant/tree/main/Downstream%20Analytics)|[scrublet_predictions](https://github.com/PorrettLab/Spatiotemporal-immune-atlas-of-the-1st-clinical-grade-gene-edited-pig-to-human-kidney-xenotransplant/tree/main/Downstream%20Analytics/scrublet_predictions)|This file provides an example on ..... |
 
 
-
+-------------------------
 **Please cite:**
+
 Cheung, D, M., et al. Spatiotemporal immune atlas of the first clinical-grade, gene-edited pig-to-human kidney xenotransplant. Nat Commun (2023). https://www.ncbi.nlm.nih.gov/pmc/articles/PMC9882594/
 doi: 10.21203/rs.3.rs-2382345/v1
 PMCID: PMC9882594
