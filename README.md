@@ -6,7 +6,7 @@ This repository contains analytics files and code used in the generation of the 
 -------------------------
 **Please cite:**
 
-Cheung, M.D., Asiimwe, R., Erman, E.N. et al. [Spatiotemporal immune atlas of a clinical-grade gene-edited pig-to-human kidney xenotransplant](https://doi.org/10.1038/s41467-024-47454-7). Nat Commun 15, 3140 (2024). 
+Cheung, M.D., Asiimwe, R., Erman, E.N. et al. Spatiotemporal immune atlas of a clinical-grade gene-edited pig-to-human kidney xenotransplant. Nat Commun 15, 3140 (2024). 
 DOI: https://doi.org/10.1038/s41467-024-47454-7
 
 **Code:**
