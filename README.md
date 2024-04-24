@@ -4,12 +4,12 @@ This repository contains analytics files and code used in the generation of the 
 &nbsp;
 
 -------------------------
-**Please cite (subject to change):**
+**Please cite:**
 
-Cheung, D, M., et al. Spatiotemporal immune atlas of the first clinical-grade, gene-edited pig-to-human kidney xenotransplant. Nat Commun (2023). https://www.ncbi.nlm.nih.gov/pmc/articles/PMC9882594/
+Cheung, M.D., Asiimwe, R., Erman, E.N. et al. [Spatiotemporal immune atlas of a clinical-grade gene-edited pig-to-human kidney xenotransplant](https://doi.org/10.1038/s41467-024-47454-7). Nat Commun 15, 3140 (2024). 
+DOI: https://doi.org/10.1038/s41467-024-47454-7
 
-doi: 10.21203/rs.3.rs-2382345/v1 | PMCID: PMC9882594 | PMID: 36711785
-
+**Code:**
 Current Release : v0.1.0-alpha [![DOI](https://zenodo.org/badge/673450738.svg)](https://zenodo.org/doi/10.5281/zenodo.10809480)
 
 ##### File descriptions:
