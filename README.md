@@ -1,6 +1,6 @@
-# Spatiotemporal immune atlas of a clinical-grade, gene-edited pig-to-human kidney xenotransplant
+# Spatiotemporal immune atlas of a clinical-grade gene-edited pig-to-human kidney xenotransplant
 
-This repository contains analytics files and code used in the generation of the manuscript: *Spatiotemporal immune atlas a clinical-grade, gene-edited pig-to-human kidney xenotransplant*
+This repository contains analytics files and code used in the generation of the manuscript: *Spatiotemporal immune atlas of a clinical-grade gene-edited pig-to-human kidney xenotransplant*
 &nbsp;
 
 -------------------------
