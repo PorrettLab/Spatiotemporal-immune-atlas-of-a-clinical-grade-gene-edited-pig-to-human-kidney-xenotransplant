@@ -1,6 +1,6 @@
 #!/bin/bash 
 #
-#batch job script for a typicall cellranger count run 
+#batch job script for a typical cellranger count run 
 
 #SBATCH --job-name=cellranger_count_HPKcd45_hp38
 #SBATCH --partition=largemem 
